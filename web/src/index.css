@@ -1,0 +1,50 @@
+@import "tailwindcss";
+
+/* Obsidian-flavoured terminal theme */
+@theme {
+  --color-ob-bg: #1a1a1a;
+  --color-ob-panel: #202020;
+  --color-ob-edge: #363636;
+  --color-ob-text: #dadada;
+  --color-ob-muted: #707070;
+  --color-ob-accent: #a78bfa;
+  --color-ob-rx: #c8d3df;
+  --color-ob-tx: #6cb6ff;
+  --color-ob-sys: #b48ead;
+  --color-ob-err: #e06c75;
+  --color-ob-ok: #98c379;
+
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-ob-bg);
+  color: var(--color-ob-text);
+  font-family: var(--font-mono);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-ob-accent) 35%, transparent);
+}
+
+/* terminal scrollbar */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #3a3a3a;
+  border: 2px solid var(--color-ob-bg);
+  border-radius: 6px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #4a4a4a;
+}

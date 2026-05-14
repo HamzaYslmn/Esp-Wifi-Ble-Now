@@ -29,6 +29,7 @@ BLE::OnRx          g_userRx;
 BLE::OnMsg         g_userMsg;
 bool               g_active = false;
 uint8_t            g_seq = 0;
+String             g_ownMacStr;          // this node's MAC, tags our own NUS notifies
 
 // MARK: dedup - per-peer last seq, collapses repeated adv packets into one
 // onReceive() call (controller emits the same adv ~10x/sec).
@@ -145,6 +146,7 @@ String BLE::begin() {
   if (g_active) return BLEDevice::getAddress().toString().c_str();
 
   BLEDevice::init("EspWB");
+  g_ownMacStr = BLEDevice::getAddress().toString().c_str();
   // Max TX power (+9 dBm) on every power type for the longest possible range.
   BLEDevice::setPower(ESP_PWR_LVL_P9, ESP_BLE_PWR_TYPE_DEFAULT);
   BLEDevice::setPower(ESP_PWR_LVL_P9, ESP_BLE_PWR_TYPE_ADV);
@@ -177,11 +179,16 @@ void BLE::end() {
 
 // MARK: broadcast - update the always-on adv payload (or NUS-notify if a
 // browser is GATT-connected, since Bluedroid pauses adv during a connection).
+// NUS notifies are tagged "<ownMac> <payload>\n" so the browser shows the
+// same "<mac> <payload>" shape for our own broadcasts and relayed peer ones.
 bool BLE::broadcast(const uint8_t* data, size_t len) {
   if (!g_active || len > maxBroadcastLen()) return false;
 
   if (g_connected && g_txChar) {
-    g_txChar->setValue((uint8_t*)data, len);
+    String line = g_ownMacStr + " ";
+    line.concat((const char*)data, len);
+    line += "\n";
+    g_txChar->setValue((uint8_t*)line.c_str(), line.length());
     g_txChar->notify();
     return true;
   }
