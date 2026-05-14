@@ -1,18 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-// NUS service the ESP32 advertises — used to filter the chooser and, in connect
-// (GATT relay) mode, to subscribe to the TX notify char it relays peers on.
-const NUS_SERVICE = '6e400001-b5a3-f393-e0a9-e50e24dcca9e'
-const NUS_RX = '6e400002-b5a3-f393-e0a9-e50e24dcca9e' // browser -> ESP32
-const NUS_TX = '6e400003-b5a3-f393-e0a9-e50e24dcca9e' // ESP32 -> browser
-// Manufacturer data: company 0xFFFF, then 'E' 'W' seq payload… (see src/EspWB_BLE.cpp).
+// ESP32 wire format — manufacturer data: company 0xFFFF, then 'E' 'W' seq payload.
+// (see src/EspWB_BLE.cpp)
 const MFR_COMPANY = 0xffff
 const MAGIC_E = 0x45
 const MAGIC_W = 0x57
+const FLAG_URL = 'chrome://flags/#enable-experimental-web-platform-features'
 
 const hasBluetooth = typeof navigator !== 'undefined' && !!navigator.bluetooth
 
-// MARK: shared log
+// MARK: log
 function useLog() {
   const [lines, setLines] = useState([])
   const idRef = useRef(0)
@@ -26,27 +23,18 @@ function useLog() {
   return { lines, append, clear: useCallback(() => setLines([]), []) }
 }
 
-// MARK: BLE — broadcast scan, no device pick, no GATT connection.
-// As of 2026 requestLEScan() + watchAdvertisements() + getDevices() are all
-// still behind chrome://flags/#enable-experimental-web-platform-features —
-// none have shipped flag-free (WebBluetoothCG/web-bluetooth, implementation-status).
-// We scope the scan to the ESP32's NUS service UUID (advertised even before any
-// payload) and keep packets carrying our 'EW' manufacturer-data magic.
-function useBleListen(append) {
+// MARK: BLE passive scan — requestLEScan(), no pairing, no connection. Reads the
+// ESP32's manufacturer-data broadcasts and keeps the 'EW' ones. Needs the flag
+// chrome://flags/#enable-experimental-web-platform-features; not supported on
+// Chrome for Windows (its BLE backend can't initiate a scan).
+function useScan(append) {
   const [scanning, setScanning] = useState(false)
-  const [seen, setSeen] = useState(0) // raw adverts received — proves the scan is live
-  const seenRef = useRef(0)
-  const tickRef = useRef(null)
-  const seqRef = useRef(new Map()) // device.id -> last seq, drops repeated adverts
   const scanRef = useRef(null)
+  const seqRef = useRef(new Map()) // device.id -> last seq, drops repeated adverts
   const supported = hasBluetooth && !!navigator.bluetooth.requestLEScan
 
   const onAdv = useCallback(
     (e) => {
-      seenRef.current++
-      // Scan accepts every advert; the ESP32 ones are picked out by their
-      // 'EW' manufacturer-data magic (filtering the scan by service UUID is
-      // unreliable — a 128-bit UUID + mfr data rarely fit one legacy advert).
       const d = e.manufacturerData.get(MFR_COMPANY)
       if (!d || d.byteLength < 3) return
       if (d.getUint8(0) !== MAGIC_E || d.getUint8(1) !== MAGIC_W) return
@@ -54,7 +42,7 @@ function useBleListen(append) {
       if (seqRef.current.get(e.device.id) === seq) return // controller repeats adv ~10×/s
       seqRef.current.set(e.device.id, seq)
       const payload = new TextDecoder().decode(new DataView(d.buffer, d.byteOffset + 3))
-      append('rx', payload, e.device.name || e.device.id)
+      append('rx', payload, `${e.device.name || e.device.id} ${e.rssi}dBm`)
     },
     [append],
   )
@@ -63,124 +51,33 @@ function useBleListen(append) {
     if (!scanRef.current) return
     scanRef.current.stop()
     scanRef.current = null
-    clearInterval(tickRef.current)
     navigator.bluetooth.removeEventListener('advertisementreceived', onAdv)
     setScanning(false)
-    append('sys', `scan stopped — ${seenRef.current} adverts seen`)
+    append('sys', 'scan stopped')
   }, [append, onAdv])
 
-  const listen = useCallback(async () => {
+  const start = useCallback(async () => {
     if (scanRef.current) return
     if (!supported) {
-      append(
-        'err',
-        'BLE scanning unavailable — enable chrome://flags/#enable-experimental-web-platform-features, then restart Chrome',
-      )
+      append('err', `BLE scan unavailable — enable ${FLAG_URL}, then restart the browser`)
       return
     }
     try {
-      seenRef.current = 0
-      setSeen(0)
       scanRef.current = await navigator.bluetooth.requestLEScan({
         acceptAllAdvertisements: true,
-        keepRepeatedDevices: true,
+        keepRepeatedDevices: true, // ESP32 re-broadcasts a fresh seq every second
       })
       navigator.bluetooth.addEventListener('advertisementreceived', onAdv)
-      // Flush the raw-advert count to the UI a couple times a second.
-      tickRef.current = setInterval(() => setSeen(seenRef.current), 500)
       setScanning(true)
-      append('sys', 'scanning all BLE adverts — ESP32 packets logged, no pairing')
+      append('sys', 'scanning ESP32 broadcasts — no pairing, no connection')
     } catch (e) {
-      append(
-        'err',
-        e.name === 'NotAllowedError' ? 'BLE scan permission denied' : 'BLE scan failed: ' + e.message,
-      )
+      append('err', 'scan failed: ' + e.message)
     }
   }, [append, onAdv, supported])
 
-  // Stop the scan if the component unmounts.
-  useEffect(
-    () => () => {
-      scanRef.current?.stop()
-      clearInterval(tickRef.current)
-    },
-    [],
-  )
+  useEffect(() => () => scanRef.current?.stop(), [])
 
-  return { scanning, seen, supported, listen, stop }
-}
-
-// MARK: BLE — connect (GATT relay). The only path that works in Chrome on
-// Windows: pick one ESP32 once, GATT-connect, and subscribe to its NUS TX
-// char. Firmware relays every broadcast it hears (own + peers) as
-// "<mac> <payload>" notifications, so one connection surfaces the whole mesh.
-function useBleConnect(append) {
-  const [connected, setConnected] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const deviceRef = useRef(null)
-  const rxCharRef = useRef(null)
-
-  const connect = useCallback(async () => {
-    setBusy(true)
-    let device
-    try {
-      device = await navigator.bluetooth.requestDevice({
-        filters: [{ services: [NUS_SERVICE] }],
-      })
-    } catch (e) {
-      if (e.name !== 'NotFoundError') append('err', 'BLE: ' + e.message)
-      setBusy(false)
-      return
-    }
-    try {
-      const server = await device.gatt.connect()
-      const svc = await server.getPrimaryService(NUS_SERVICE)
-      const tx = await svc.getCharacteristic(NUS_TX)
-      rxCharRef.current = await svc.getCharacteristic(NUS_RX)
-      await tx.startNotifications()
-      tx.addEventListener('characteristicvaluechanged', (e) => {
-        const text = new TextDecoder().decode(e.target.value).trim()
-        const sp = text.indexOf(' ')
-        if (sp > 0 && /^[0-9a-f:]{17}$/i.test(text.slice(0, sp))) {
-          append('rx', text.slice(sp + 1), text.slice(0, sp))
-        } else {
-          append('rx', text)
-        }
-      })
-      deviceRef.current = device
-      setConnected(true)
-      append('sys', `connected · ${device.name || device.id} (relay)`)
-      device.addEventListener('gattserverdisconnected', () => {
-        deviceRef.current = null
-        rxCharRef.current = null
-        setConnected(false)
-        append('sys', 'BLE disconnected')
-      })
-    } catch (e) {
-      append('err', 'BLE connect failed: ' + e.message)
-    } finally {
-      setBusy(false)
-    }
-  }, [append])
-
-  const send = useCallback(
-    async (text) => {
-      if (!text || !rxCharRef.current) return
-      try {
-        await rxCharRef.current.writeValueWithoutResponse(new TextEncoder().encode(text))
-        append('tx', text, 'ble')
-      } catch (e) {
-        append('err', 'BLE send failed: ' + e.message)
-      }
-    },
-    [append],
-  )
-
-  const disconnect = useCallback(() => deviceRef.current?.gatt?.disconnect(), [])
-
-  useEffect(() => () => deviceRef.current?.gatt?.disconnect(), [])
-
-  return { connected, busy, connect, disconnect, send }
+  return { scanning, supported, start, stop }
 }
 
 // MARK: Wi-Fi — simple GET, no preflight.
@@ -216,13 +113,11 @@ const BTN =
 
 export default function App() {
   const { lines, append, clear } = useLog()
-  const ble = useBleListen(append)
-  const conn = useBleConnect(append)
+  const scan = useScan(append)
   const wifi = useWifi(append)
 
   const [ip, setIp] = useState(() => localStorage.getItem('espwb-ip') || '')
   const [wifiMsg, setWifiMsg] = useState('')
-  const [bleMsg, setBleMsg] = useState('')
 
   const bodyRef = useRef(null)
   useEffect(() => {
@@ -232,13 +127,6 @@ export default function App() {
     if (!hasBluetooth) append('err', 'no Web Bluetooth — use Chrome/Edge on desktop or Android')
   }, [append])
 
-  const submitBle = (e) => {
-    e.preventDefault()
-    const t = bleMsg.trim()
-    if (!t) return
-    conn.send(t)
-    setBleMsg('')
-  }
   const submitWifi = (e) => {
     e.preventDefault()
     const t = wifiMsg.trim()
@@ -266,22 +154,12 @@ export default function App() {
 
       {/* status bar */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-ob-edge px-3 py-1.5 text-xs sm:px-4">
-        <Stat
-          label="ble"
-          on={ble.scanning || conn.connected}
-          detail={
-            conn.connected
-              ? 'connected (relay)'
-              : ble.scanning
-                ? `scanning · ${ble.seen} adv`
-                : 'idle'
-          }
-        />
+        <Stat label="ble" on={scan.scanning} detail={scan.scanning ? 'scanning' : 'idle'} />
         <Stat label="wifi" on={!!ip.trim()} detail={ip.trim() || 'no host'} />
       </div>
 
-      {/* flag notice — shown when the browser can't scan broadcasts yet */}
-      {!ble.supported && <FlagBanner />}
+      {/* flag notice — shown when the browser can't scan broadcasts */}
+      {!scan.supported && <FlagBanner />}
 
       {/* output */}
       <div
@@ -289,7 +167,7 @@ export default function App() {
         className="flex-1 overflow-y-auto px-3 py-3 text-[13px] leading-relaxed sm:px-4"
       >
         <p className="text-ob-muted">
-          esp-wifi-ble console · listens to ESP32 BLE broadcasts, sends over Wi-Fi.
+          esp-wifi-ble console · scans ESP32 BLE broadcasts, sends over Wi-Fi.
         </p>
         {lines.map((l) => (
           <div key={l.id} className="flex gap-2 whitespace-pre-wrap break-words">
@@ -306,42 +184,16 @@ export default function App() {
         <div className="flex flex-wrap items-center gap-2 px-3 py-2 sm:px-4">
           <Prompt sym="ble" />
           <span className="min-w-[6rem] flex-1 text-[13px] text-ob-muted/60">
-            scan = no pairing · connect = relay, works on Windows
+            passive scan — no pairing, no connection
           </span>
           <button
-            onClick={ble.scanning ? ble.stop : ble.listen}
-            disabled={!hasBluetooth || conn.connected}
+            onClick={scan.scanning ? scan.stop : scan.start}
+            disabled={!hasBluetooth}
             className={BTN}
           >
-            {ble.scanning ? 'stop scan' : 'listen ble'}
-          </button>
-          <button
-            onClick={conn.connected ? conn.disconnect : conn.connect}
-            disabled={!hasBluetooth || conn.busy || ble.scanning}
-            className={BTN}
-          >
-            {conn.busy ? 'connecting…' : conn.connected ? 'disconnect' : 'connect'}
+            {scan.scanning ? 'stop' : 'scan ble'}
           </button>
         </div>
-        {conn.connected && (
-          <form
-            onSubmit={submitBle}
-            className="flex flex-wrap items-center gap-2 border-t border-ob-edge/60 px-3 py-2 sm:px-4"
-          >
-            <Prompt sym="ble" />
-            <input
-              value={bleMsg}
-              onChange={(e) => setBleMsg(e.target.value)}
-              maxLength={240}
-              autoComplete="off"
-              placeholder="message over BLE…"
-              className="min-w-[7rem] flex-1 bg-transparent text-[13px] text-ob-text placeholder:text-ob-muted/60 focus:outline-none"
-            />
-            <button type="submit" className={BTN}>
-              send ble
-            </button>
-          </form>
-        )}
         <form
           onSubmit={submitWifi}
           className="flex flex-wrap items-center gap-2 border-t border-ob-edge/60 px-3 py-2 sm:px-4"
@@ -364,7 +216,7 @@ export default function App() {
             className="min-w-[7rem] flex-1 bg-transparent text-[13px] text-ob-text placeholder:text-ob-muted/60 focus:outline-none"
           />
           <button type="submit" disabled={wifi.busy} className={BTN}>
-            {wifi.busy ? 'sending…' : 'send http'}
+            {wifi.busy ? 'sending…' : 'send'}
           </button>
         </form>
       </div>
@@ -372,11 +224,7 @@ export default function App() {
   )
 }
 
-const FLAG_URL = 'chrome://flags/#enable-experimental-web-platform-features'
-
-// Shown when requestLEScan() is missing: BLE broadcast scanning needs an
-// experimental flag (still flag-gated as of 2026). chrome:// links aren't
-// navigable from a page, so the URL is copy-to-clipboard instead.
+// chrome:// links aren't navigable from a page, so the URL is copy-to-clipboard.
 function FlagBanner() {
   const [copied, setCopied] = useState(false)
   const copy = () => {
@@ -387,14 +235,12 @@ function FlagBanner() {
   }
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-ob-edge bg-ob-accent/10 px-3 py-2 text-xs sm:px-4">
-      <span className="text-ob-accent">scan mode needs a flag:</span>
+      <span className="text-ob-accent">BLE scan needs a flag:</span>
       <code className="rounded bg-ob-bg/70 px-1.5 py-0.5 text-ob-text">{FLAG_URL}</code>
       <button onClick={copy} className={`${BTN} py-0.5`}>
         {copied ? 'copied' : 'copy'}
       </button>
-      <span className="text-ob-muted">
-        enable + restart — or use connect (works on Windows).
-      </span>
+      <span className="text-ob-muted">enable it, then restart the browser.</span>
     </div>
   )
 }
