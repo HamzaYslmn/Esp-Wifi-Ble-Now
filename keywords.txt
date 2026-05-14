@@ -1,0 +1,45 @@
+#######################################
+# Syntax Coloring Map for Esp-WiFi-BLE-Now
+#######################################
+
+#######################################
+# Datatypes (KEYWORD1)
+#######################################
+Wifi	KEYWORD1
+BLE	KEYWORD1
+EspNow	KEYWORD1
+EspWB	KEYWORD1
+
+#######################################
+# Methods and Functions (KEYWORD2)
+#######################################
+beginSTA	KEYWORD2
+beginAP	KEYWORD2
+beginAPSTA	KEYWORD2
+channel	KEYWORD2
+staIP	KEYWORD2
+apIP	KEYWORD2
+begin	KEYWORD2
+end	KEYWORD2
+broadcast	KEYWORD2
+onReceive	KEYWORD2
+onMessage	KEYWORD2
+isConnected	KEYWORD2
+maxBroadcastLen	KEYWORD2
+getOwnMac	KEYWORD2
+printMac	KEYWORD2
+addPeer	KEYWORD2
+addBroadcastPeer	KEYWORD2
+removePeer	KEYWORD2
+setPmk	KEYWORD2
+send	KEYWORD2
+available	KEYWORD2
+read	KEYWORD2
+lastRssi	KEYWORD2
+instance	KEYWORD2
+enableCors	KEYWORD2
+
+#######################################
+# Constants (LITERAL1)
+#######################################
+ESP_WIFI_BLE_NOW_VERSION	LITERAL1
