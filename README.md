@@ -4,6 +4,8 @@ Run **Wi-Fi + ESP-NOW + BLE all together** on a single ESP32, in one tiny Arduin
 
 The "Now" in the name is Espressif's connectionless **ESP-NOW** protocol.
 
+Web console: **https://hamzayslmn.github.io/Esp-Wifi-Ble-Now/**
+
 ---
 
 ## What you get
@@ -185,7 +187,8 @@ FF FF 'E' 'W' seq[1] payload[0..18]
 
 When something is connected over GATT, every received broadcast is also relayed out on the TX characteristic as `"<mac> <seq> <payload>\n"` — handy for a browser dashboard.
 
-A simple Web Bluetooth dashboard lives in [`web/`](web/).
+A simple Web Bluetooth dashboard lives in [`web/`](web/) — live at
+**https://hamzayslmn.github.io/Esp-Wifi-Ble-Now/**
 
 ---
 
