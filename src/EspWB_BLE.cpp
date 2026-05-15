@@ -31,8 +31,7 @@ bool               g_active = false;
 uint8_t            g_seq = 0;
 String             g_ownMacStr;          // this node's MAC, tags our own NUS notifies
 
-// MARK: dedup - per-peer last seq, collapses repeated adv packets into one
-// onReceive() call (controller emits the same adv ~10x/sec).
+// MARK: dedup - per-peer last seq collapses repeated adv packets (~10/sec).
 struct Peer { uint8_t mac[6]; uint8_t seq; bool used; };
 Peer g_peers[8];
 
@@ -58,11 +57,13 @@ class ServerCb : public BLEServerCallbacks {
   void onConnect(BLEServer*, esp_ble_gatts_cb_param_t* param) override {
     g_connected = true;
     if (param) memcpy(g_peerMac, param->connect.remote_bda, 6);
+    if (g_scan) g_scan->stop();                        // free BLE controller for GATT events
   }
   void onDisconnect(BLEServer*) override {
     g_connected = false;
     memset(g_peerMac, 0, 6);
-    if (g_adv) g_adv->start();                         // browsers can reconnect
+    if (g_adv)  g_adv->start();                        // browsers can reconnect
+    if (g_scan) g_scan->start(0, nullptr, false);      // resume peer-adv scan
   }
 };
 
@@ -77,8 +78,7 @@ class RxCb : public BLECharacteristicCallbacks {
 ServerCb g_serverCb;
 RxCb     g_rxCb;
 
-// MARK: scan - decode our manufacturer ad, dedupe, hand to user callback,
-// and relay to a connected browser as "<mac> <payload>\n".
+// MARK: scan - decode mfr ad, dedupe, fire callback, relay to connected browser.
 class ScanCb : public BLEAdvertisedDeviceCallbacks {
   void onResult(BLEAdvertisedDevice dev) override {
     if (!dev.haveManufacturerData()) return;
@@ -142,15 +142,13 @@ void setAdv(const uint8_t* data, size_t len) {
 } // namespace
 
 // MARK: lifecycle
-String BLE::begin() {
+String BLE::begin(bool longRange) {
   if (g_active) return BLEDevice::getAddress().toString().c_str();
 
   BLEDevice::init("EspWB");
   g_ownMacStr = BLEDevice::getAddress().toString().c_str();
-  // Max TX power (+9 dBm) on every power type for the longest possible range.
-  BLEDevice::setPower(ESP_PWR_LVL_P9, ESP_BLE_PWR_TYPE_DEFAULT);
-  BLEDevice::setPower(ESP_PWR_LVL_P9, ESP_BLE_PWR_TYPE_ADV);
-  BLEDevice::setPower(ESP_PWR_LVL_P9, ESP_BLE_PWR_TYPE_SCAN);
+
+  if (longRange) BLEDevice::setPower(ESP_PWR_LVL_P9);  // +9 dBm, all power types
 
   setupNusServer();
 
@@ -159,9 +157,11 @@ String BLE::begin() {
   g_adv->start();                                      // beacon for browsers
 
   g_scan = BLEDevice::getScan();
+  g_scan->setInterval(160);                            // 100 ms period
+  g_scan->setWindow(32);                               // 20 ms scan = 20% duty -> ~80% RF for ESP-NOW
   g_scan->setAdvertisedDeviceCallbacks(&g_scanCb, true /*wantDuplicates*/);
   g_scan->setActiveScan(false);                        // passive - no TX from scanner
-  g_scan->start(0, nullptr, false);                    // 0 = continuous
+  g_scan->start(0, nullptr, false);                    // 0 = continuous (paused while GATT connected)
 
   g_active = true;
   return BLEDevice::getAddress().toString().c_str();
@@ -177,10 +177,7 @@ void BLE::end() {
   g_connected = false; g_active = false;
 }
 
-// MARK: broadcast - update the always-on adv payload (or NUS-notify if a
-// browser is GATT-connected, since Bluedroid pauses adv during a connection).
-// NUS notifies are tagged "<ownMac> <payload>\n" so the browser shows the
-// same "<mac> <payload>" shape for our own broadcasts and relayed peer ones.
+// MARK: broadcast - update adv payload, or NUS-notify if browser is connected.
 bool BLE::broadcast(const uint8_t* data, size_t len) {
   if (!g_active || len > maxBroadcastLen()) return false;
 

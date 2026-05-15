@@ -2,8 +2,7 @@
 #include <esp_wifi.h>
 
 namespace {
-// MARK: helpers
-// OR the wanted role into the running mode (bitmask: OFF=0 STA=1 AP=2 AP_STA=3).
+// MARK: helpers - OR wanted role into running mode (OFF=0 STA=1 AP=2 AP_STA=3).
 void ensureMode(wifi_mode_t want) {
   WiFi.mode((wifi_mode_t)(WiFi.getMode() | want));
 }
@@ -21,33 +20,41 @@ const char* orNull(const char* pass) {            // null => open network
 }
 } // namespace
 
-// MARK: bring-up
-bool Wifi::beginSTA(const char* ssid, const char* pass, uint32_t timeoutMs) {
+// MARK: bring-up - leave Wi-Fi PS at default (WIFI_PS_MIN_MODEM) for BLE coex.
+bool Wifi::beginSTA(const char* ssid, const char* pass, uint32_t timeoutMs,
+                    bool longRange) {
   ensureMode(WIFI_STA);
   WiFi.begin(ssid, pass);
   bool ok = waitConnected(timeoutMs);
-  // Leave Wi-Fi modem-sleep at the Arduino default (WIFI_PS_MIN_MODEM): per
-  // the official ESP-IDF coexistence guide, customising power-save params
-  // "leads to extra Wi-Fi priority requests, impacting BT performance" and
-  // hurts BLE coexistence. Default behaviour gives the coex module a stable
-  // schedule for slot allocation.
+  if (!ok) {                                      // halt supplicant so it stops scanning channels
+    WiFi.setAutoReconnect(false);
+    WiFi.disconnect(false, false);
+    esp_wifi_disconnect();
+  }
+  if (longRange) esp_wifi_set_max_tx_power(84);   // +20 dBm
   return ok;
 }
 
-bool Wifi::beginAP(const char* ssid, const char* pass, uint8_t channel, bool hidden) {
+bool Wifi::beginAP(const char* ssid, const char* pass, uint8_t channel,
+                   bool hidden, bool longRange) {
   ensureMode(WIFI_AP);
-  return WiFi.softAP(ssid, orNull(pass), channel, hidden ? 1 : 0);
+  bool ok = WiFi.softAP(ssid, orNull(pass), channel, hidden ? 1 : 0);
+  if (longRange) esp_wifi_set_max_tx_power(84);
+  return ok;
 }
 
 bool Wifi::beginAPSTA(const char* apSsid, const char* apPass,
                       const char* staSsid, const char* staPass,
-                      uint8_t apChannel, uint32_t staTimeoutMs) {
+                      uint8_t apChannel, uint32_t staTimeoutMs,
+                      bool longRange) {
   WiFi.mode(WIFI_AP_STA);
   bool apOk = WiFi.softAP(apSsid, orNull(apPass), apChannel);
   WiFi.begin(staSsid, staPass);
   waitConnected(staTimeoutMs);
+  if (longRange) esp_wifi_set_max_tx_power(84);
   return apOk;
 }
+
 
 // MARK: info
 uint8_t Wifi::channel() {
