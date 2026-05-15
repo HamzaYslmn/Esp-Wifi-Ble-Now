@@ -220,3 +220,5 @@ bool BLE::isConnected() const { return g_connected; }
 void BLE::getOwnMac(uint8_t out[6]) {
   espwbnParseMac(BLEDevice::getAddress().toString().c_str(), out);
 }
+
+void BLE::printMac(Print& p, const uint8_t mac[6]) { espwbnPrintMac(p, mac); }
