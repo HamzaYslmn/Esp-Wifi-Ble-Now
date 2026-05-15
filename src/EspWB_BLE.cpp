@@ -171,7 +171,7 @@ String BLE::begin(bool longRange) {
 
   g_scan = BLEDevice::getScan();
   g_scan->setInterval(160);                            // 100 ms period
-  g_scan->setWindow(32);                               // 20 ms scan = 20% duty -> ~80% RF for ESP-NOW
+  g_scan->setWindow(16);                               // 10 ms scan = 10% duty -> ~90% RF for ESP-NOW (BLE adv fires every 20-40 ms anyway)
   g_scan->setAdvertisedDeviceCallbacks(&g_scanCb, true /*wantDuplicates*/);
   g_scan->setActiveScan(true);                         // active - pulls peer's scan-response for full mfr payload
   g_scan->start(0, nullptr, false);                    // 0 = continuous (paused while GATT connected)
