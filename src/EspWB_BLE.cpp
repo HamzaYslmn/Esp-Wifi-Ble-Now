@@ -6,12 +6,13 @@
 #include <BLE2902.h>
 #include <BLEScan.h>
 #include <BLEAdvertisedDevice.h>
+#include <esp_mac.h>
 
 namespace {
-// MARK: wire format - manufacturer data: FF FF 'E' 'W' seq[1] payload
+// MARK: wire format - manufacturer data: FF FF 'E' 'W' seq[1] payload (in scan-response only).
 constexpr uint8_t MAGIC0     = 'E';
 constexpr uint8_t MAGIC1     = 'W';
-constexpr size_t  MFR_HEADER = 5;
+constexpr size_t  MFR_HEADER = 5;        // FF FF E W seq
 
 // MARK: NUS - Nordic UART Service (browser <-> ESP32 over Web Bluetooth)
 constexpr char NUS_SERVICE[] = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
@@ -30,6 +31,7 @@ BLE::OnMsg         g_userMsg;
 bool               g_active = false;
 uint8_t            g_seq = 0;
 String             g_ownMacStr;          // this node's MAC, tags our own NUS notifies
+String             g_devName;            // "EspWB-XXXX" (XXXX = last 2 hex of BT MAC)
 
 // MARK: dedup - per-peer last seq collapses repeated adv packets (~10/sec).
 struct Peer { uint8_t mac[6]; uint8_t seq; bool used; };
@@ -123,21 +125,24 @@ void setupNusServer() {
 }
 
 void setAdv(const uint8_t* data, size_t len) {
-  uint8_t buf[MFR_HEADER + BLE::maxBroadcastLen()];
-  buf[0] = 0xFF; buf[1] = 0xFF;
-  buf[2] = MAGIC0; buf[3] = MAGIC1;
-  buf[4] = ++g_seq;
-  if (data && len) memcpy(buf + MFR_HEADER, data, len);
+  if (len > BLE::maxBroadcastLen()) len = BLE::maxBroadcastLen();
 
   String mfr;
   mfr.reserve(MFR_HEADER + len);
-  for (size_t i = 0; i < MFR_HEADER + len; ++i) mfr += (char)buf[i];
+  mfr += (char)0xFF; mfr += (char)0xFF;
+  mfr += (char)MAGIC0; mfr += (char)MAGIC1; mfr += (char)(++g_seq);
+  for (size_t i = 0; i < len; ++i) mfr += (char)data[i];
 
+  // Adv (~15B): flags + complete name "EspWB-XXXX". Browser chooser shows the name.
   BLEAdvertisementData adv;
   adv.setFlags(0x06);                                  // LE General Disc, BR/EDR off
-  adv.setCompleteServices(BLEUUID(NUS_SERVICE));       // browser-visible
-  if (len) adv.setManufacturerData(mfr);
+  adv.setName(g_devName.c_str());                      // unique per node
   g_adv->setAdvertisementData(adv);
+
+  // Scan-rsp (~29B): mfr payload (FF FF E W seq + up to 24 user bytes).
+  BLEAdvertisementData rsp;
+  rsp.setManufacturerData(mfr);
+  g_adv->setScanResponseData(rsp);
 }
 } // namespace
 
@@ -145,7 +150,15 @@ void setAdv(const uint8_t* data, size_t len) {
 String BLE::begin(bool longRange) {
   if (g_active) return BLEDevice::getAddress().toString().c_str();
 
-  BLEDevice::init("EspWB");
+  // Build a unique name from the BT MAC before BLEDevice::init (which sets the GAP name).
+  uint8_t btmac[6] = {0};
+  esp_read_mac(btmac, ESP_MAC_BT);
+  char nameBuf[16];
+  snprintf(nameBuf, sizeof(nameBuf), "EspWB-%02X%02X", btmac[4], btmac[5]);
+  g_devName = nameBuf;
+
+  BLEDevice::init(g_devName.c_str());
+  BLEDevice::setMTU(247);                              // 247 ATT -> 244 B per NUS write/notify (default 23->20)
   g_ownMacStr = BLEDevice::getAddress().toString().c_str();
 
   if (longRange) BLEDevice::setPower(ESP_PWR_LVL_P9);  // +9 dBm, all power types
@@ -160,7 +173,7 @@ String BLE::begin(bool longRange) {
   g_scan->setInterval(160);                            // 100 ms period
   g_scan->setWindow(32);                               // 20 ms scan = 20% duty -> ~80% RF for ESP-NOW
   g_scan->setAdvertisedDeviceCallbacks(&g_scanCb, true /*wantDuplicates*/);
-  g_scan->setActiveScan(false);                        // passive - no TX from scanner
+  g_scan->setActiveScan(true);                         // active - pulls peer's scan-response for full mfr payload
   g_scan->start(0, nullptr, false);                    // 0 = continuous (paused while GATT connected)
 
   g_active = true;

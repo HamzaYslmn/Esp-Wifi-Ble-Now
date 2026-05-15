@@ -20,7 +20,7 @@ const char* orNull(const char* pass) {            // null => open network
 }
 } // namespace
 
-// MARK: bring-up - leave Wi-Fi PS at default (WIFI_PS_MIN_MODEM) for BLE coex.
+// MARK: bring-up - PS is forced OFF inside EspNow::begin() so RX is always armed.
 bool Wifi::beginSTA(const char* ssid, const char* pass, uint32_t timeoutMs,
                     bool longRange) {
   ensureMode(WIFI_STA);

@@ -38,6 +38,13 @@ read	KEYWORD2
 lastRssi	KEYWORD2
 instance	KEYWORD2
 enableCors	KEYWORD2
+onLocked	KEYWORD2
+isScanning	KEYWORD2
+setRepeats	KEYWORD2
+repeats	KEYWORD2
+addPeers	KEYWORD2
+sendAll	KEYWORD2
+peerCount	KEYWORD2
 
 #######################################
 # Constants (LITERAL1)

@@ -32,7 +32,7 @@ ble.begin();
 ### 2. ESP-NOW broadcast between ESPs
 ```cpp
 EspNow now;
-now.begin();                       // 1 Mbps PHY, default TX power (pass longRange=true for LR + max TX)
+now.begin();                       // LR PHY + LORA_250K broadcast always on (pass longRange=true for +21 dBm TX)
 now.onReceive([](auto mac, auto d, auto n, auto rssi){ /* ... */ });
 now.onLocked([](uint8_t ch){ Serial.printf("locked ch %u\n", ch); });
 now.broadcast("hello");
@@ -43,6 +43,7 @@ void loop() { now.loop(); /* ... */ }   // drives auto channel discovery + pings
 Channel handling is automatic:
 - **Wi-Fi STA up:** ESP-NOW adopts the router's channel.
 - **Wi-Fi down:** the node scans channels 1..13 and locks onto the first one it hears a peer on, staying there until reboot.
+- **Manual override:** pass a non-zero `channel` to `begin()` (e.g. `now.begin(WIFI_IF_STA, true, 6)`) to pin a fixed channel and disable auto-scan. Use this when both peers will be on the same hard-coded channel — e.g. ESP-NOW + BLE coexistence with no Wi-Fi (see `examples/EspNowAndBleNoWifi`).
 
 To make discovery work without the user sending anything, every node broadcasts a 1-byte ping at 1 Hz (`0x80 | channel`). Pings are filtered out of `onReceive`. Reserved 1-byte payload range: `0x81..0x8D`.
 
@@ -65,12 +66,14 @@ http.begin();
 ```
 
 ### 5. Maximum range
-Each `begin()` takes a `longRange` flag that bumps **TX power only**:
+ESP-NOW broadcasts always go through the **software** long-range path — `WIFI_PROTOCOL_LR` + `WIFI_PHY_RATE_LORA_250K` peer rate (~3-4× sensitivity vs the default 1 Mbps). No flag needed.
+
+Each `begin()` also takes a `longRange` flag that adds the **hardware** TX-power boost on top:
 
 ```cpp
 Wifi::beginSTA("ssid", "pass", 15000, /*longRange=*/true);   // +20 dBm
 ble.begin(/*longRange=*/true);                                // +9 dBm
-now.begin(6, WIFI_IF_STA, /*longRange=*/true);                // LR PHY + max TX power
+now.begin(WIFI_IF_STA, /*longRange=*/true);                   // +21 dBm cap
 ```
 
 `longRange` does **not** change BLE's PHY — older ESP32 silicon doesn't support BLE 5 Coded PHY. If your chip *does* (ESP32-C3/S3/C6/H2) and you want even more range on BLE, add Coded PHY natively after `ble.begin()`:
@@ -83,11 +86,7 @@ esp_ble_gap_set_preferred_default_phy(ESP_BLE_GAP_PHY_CODED_PREF_MASK,
 ```
 Note: with Coded PHY active, phones / Web Bluetooth can no longer see the advertiser.
 
-### 6. Drop ESP-NOW back to plain B/G/N
-```cpp
-now.begin(1, WIFI_IF_STA, /*longRange=*/false);   // no LR PHY, default TX power
-```
-The `channel` arg is only used as a starting point when Wi-Fi STA is down (and even then, scanning will move off it). When Wi-Fi STA is up, the router's channel wins.
+**ESP-NOW LR caveats**: every peer talking to this lib must also be an ESP32 with `WIFI_PROTOCOL_LR` enabled (this lib does that automatically). Standards Wi-Fi devices cannot decode the broadcast frames. Broadcast throughput caps at ~250 kbps (single small packets are fine).
 
 ---
 
@@ -98,10 +97,10 @@ These are the only places you can't just read `esp_now.h` / `BLEDevice.h` and kn
 1. **`BLE::broadcast` wire format** — payload sits in manufacturer-specific adv data as `FF FF 'E' 'W' seq[1] payload[<=18]`. Receivers in this library decode that shape; receivers in other apps won't. Sequence-based dedupe collapses the ~10 adv-emits/sec into one `onReceive(...)`.
 2. **NUS GATT relay** — while a GATT client is connected (e.g. browser), every received broadcast is also notified out on the NUS TX char as `"<mac> <payload>\n"`. Lets a phone/dashboard see what your ESP's BLE neighbours are saying.
    - Service `6E400001-…`, RX (write) `…0002-…`, TX (notify) `…0003-…`
-3. **ESP-NOW `longRange` default = `false`** — LR PHY pegs frames to ~250 kbps, ~10× longer airtime than 1 Mbps, which collides badly with BLE scan on a Wi-Fi-less peer (ESP-IDF coex marks `ESP-NOW RX + BLE Scan` as *"stable in STA mode, otherwise not supported"*). Default is short frames; pass `true` if you need range and accept the airtime cost.
+3. **ESP-NOW software-LR default** — `EspNow::begin()` always enables `WIFI_PROTOCOL_LR` and pins the broadcast peer to `WIFI_PHY_MODE_LR` + `WIFI_PHY_RATE_LORA_250K` via `esp_now_set_peer_rate_config`. The `longRange=true` flag adds `esp_wifi_set_max_tx_power(84)` on top (hardware TX boost). Caveat: peers must also be ESP32s with LR enabled (this lib does that automatically); standards Wi-Fi devices cannot decode the broadcast frames; throughput caps at ~250 kbps.
 4. **ESP-NOW auto channel discovery** — Wi-Fi-less nodes hop channels 1..13 (500 ms dwell) and lock onto the channel embedded in the first peer's 1-byte ping (`0x80 | channel`). Removes the "both devices must be on the same channel" foot-gun. `onLocked(ch)` fires once when the lock latches.
 5. **`EspWB::enableCors(WebServer&)`** — one call installs `Access-Control-Allow-Origin: *` plus Chrome PNA preflight handling. Just sugar around `WebServer::addMiddleware`.
-6. **`longRange=true` on `BLE::begin` / `Wifi::beginSTA`** — does exactly `BLEDevice::setPower(ESP_PWR_LVL_P9)` / `esp_wifi_set_max_tx_power(84)`. Convenience, nothing magic.
+6. **`longRange=true` on `BLE::begin` / `Wifi::beginSTA` / `EspNow::begin`** — does exactly `BLEDevice::setPower(ESP_PWR_LVL_P9)` / `esp_wifi_set_max_tx_power(84)`. Convenience, nothing magic.
 
 Everything else (peer mgmt, send, RSSI, MAC helpers, scan, GATT server lifecycle) is the stock arduino-esp32 surface.
 

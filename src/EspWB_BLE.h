@@ -22,7 +22,7 @@ public:
 
   bool isConnected() const;      // a browser is connected over BLE
 
-  static constexpr size_t maxBroadcastLen() { return 18; }  // one legacy adv packet
+  static constexpr size_t maxBroadcastLen() { return 24; }  // mfr payload in scan-response (31B - 7B mfr-overhead)
 
   // Custom TX power? Just call BLEDevice::setPower(lvl) directly (native).
   static void getOwnMac(uint8_t out[6]);             // valid after begin()
