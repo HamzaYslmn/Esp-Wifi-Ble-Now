@@ -10,14 +10,23 @@ EspNow now;
 BLE    ble;
 
 void setupEspNow() {
-  // STA up but never associates. longRange=true => +21 dBm TX cap.
+  // COEX TRICK: WiFi.begin() to a non-existent AP. Never associates, but it puts
+  // the WiFi state machine into "scanning for AP" — the BLE/WiFi coex arbiter only
+  // honors PREFER_WIFI when a real STA schedule exists. Per IDF v5.4 docs, ESP-NOW
+  // RX + BLE Adv is "supported only in STA mode connected" (the "S" state).
+  // This forces coex to behave as if we're a real STA. setAutoReconnect(false) +
+  // disconnect() in now.begin() stop the scan from hopping off our pinned channel.
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(false);
+  WiFi.begin("__espwbn_coex_anchor__", "00000000");
+
+  // STA up but never associates. longRange=true => +21 dBm TX cap (warms chip).
   // Passing a non-zero channel pins it and disables auto-scan.
   if (!now.begin(WIFI_IF_STA, /*longRange=*/true, ESPNOW_CHANNEL)) {
     Serial.println("[SYS ] ESP-NOW init failed");
     return;
   }
-  now.addBroadcastPeer();
-  now.setRepeats(3);            // BLE-style triple-tx (~30 ms airtime / call)
+  now.setRepeats(10);            // 10x-tx (~60 ms airtime / call) - low loop block, dedup picks newest
 
   // // ---- UNICAST MODE ----
   // // Replace broadcast with unicast to a fixed list of peers. Unicast uses
@@ -36,7 +45,7 @@ void setupEspNow() {
 }
 
 void setupBle() {
-  // longRange=true => +9 dBm TX. Phone/browser still see it (no Coded PHY).
+  // longRange=true => +9 dBm TX (warms chip). Phone/browser still see it (no Coded PHY).
   String bleMac = ble.begin(/*longRange=*/true);
   if (bleMac.length()) Serial.printf("[BLE ] mac=%s\n", bleMac.c_str());
 
@@ -73,7 +82,6 @@ void loop() {
     size_t total = n + room;
     now.broadcast((const uint8_t*)framed, total);                        // ~200 B "<n> ...."
     // now.sendAll((const uint8_t*)framed, total);                       // unicast to all addPeers()'d MACs
-    vTaskDelay(10);
     ble.broadcast((const uint8_t*)framed, ble.maxBroadcastLen());        //   24 B "<n> ...."
   }
 }

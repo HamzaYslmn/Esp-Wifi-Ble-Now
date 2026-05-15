@@ -40,8 +40,7 @@ void setupEspNow() {
     Serial.println("[SYS ] ESP-NOW init failed");
     return;
   }
-  now.addBroadcastPeer();
-  now.setRepeats(3);            // BLE-style triple-tx (~30 ms airtime / call)
+  now.setRepeats(10);            // 10x-tx (~60 ms airtime / call) - low loop block, dedup picks newest
 
   // // ---- UNICAST MODE ----
   // // Replace broadcast with unicast to a fixed list of peers. Unicast uses
@@ -102,7 +101,6 @@ void loop() {
     size_t total = n + room;
     now.broadcast((const uint8_t*)framed, total);                        // ~200 B "<n> ...."
     // now.sendAll((const uint8_t*)framed, total);                       // unicast to all addPeers()'d MACs
-    vTaskDelay(10);
     ble.broadcast((const uint8_t*)framed, ble.maxBroadcastLen());        //   24 B "<n> ...."
   }
 }

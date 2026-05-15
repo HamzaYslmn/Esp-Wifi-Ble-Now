@@ -10,7 +10,8 @@ public:
                                    int8_t rssi)>;
   using OnMsg = OnRx;            // browser message: (its MAC = zeros, data, len, 0)
 
-  // longRange=true bumps TX power to +9 dBm (PHY stays 1M for BLE 4 compat).
+  // longRange=true bumps TX power to +9 dBm (more range, but more heat under continuous adv).
+  // Default false = stock 0 dBm. PHY stays 1M for BLE 4 compat with phones/browsers.
   String begin(bool longRange = false);  // start adv + scan + GATT, returns own MAC ("" on fail)
   void   end();
 

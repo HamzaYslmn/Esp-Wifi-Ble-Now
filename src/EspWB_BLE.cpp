@@ -161,7 +161,7 @@ String BLE::begin(bool longRange) {
   BLEDevice::setMTU(247);                              // 247 ATT -> 244 B per NUS write/notify (default 23->20)
   g_ownMacStr = BLEDevice::getAddress().toString().c_str();
 
-  if (longRange) BLEDevice::setPower(ESP_PWR_LVL_P9);  // +9 dBm, all power types
+  if (longRange) BLEDevice::setPower(ESP_PWR_LVL_P9);  // +9 dBm (caller opts in - heat trade-off)
 
   setupNusServer();
 

@@ -103,7 +103,8 @@ void IRAM_ATTR onRecv(const esp_now_recv_info_t* info, const uint8_t* data, int 
 }
 } // namespace
 
-// MARK: lifecycle - LR PHY + LR-rate broadcast always on. longRange = +21 dBm TX boost.
+// MARK: lifecycle - LR PHY + LR-rate broadcast always on (modulation, no extra heat).
+// longRange=true => +21 dBm TX boost (~3-4x range; warms chip under constant TX).
 // channel != 0 -> pinned (no auto-scan, no STA adoption). channel == 0 -> auto.
 bool EspNow::begin(wifi_interface_t iface, bool longRange, uint8_t channel) {
   g_iface    = iface;
@@ -113,7 +114,7 @@ bool EspNow::begin(wifi_interface_t iface, bool longRange, uint8_t channel) {
 
   esp_wifi_set_protocol(iface, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_LR);
   esp_wifi_set_ps(WIFI_PS_NONE);                  // mandatory: PS_MIN_MODEM parks RX between AP beacons -> drops broadcasts
-  if (longRange) esp_wifi_set_max_tx_power(84);
+  if (longRange) esp_wifi_set_max_tx_power(84);   // +21 dBm cap (caller opts in - heat trade-off)
 
   if (channel >= CH_MIN && channel <= CH_MAX) {  // user-pinned, no scan
     WiFi.setAutoReconnect(false);

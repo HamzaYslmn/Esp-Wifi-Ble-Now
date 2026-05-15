@@ -6,8 +6,9 @@
 #include <functional>
 
 // MARK: EspNow - multi-peer ESP-NOW: send/broadcast, callback or polled RX, RSSI.
-// Always max range: WIFI_PROTOCOL_LR + LR-rate broadcast (LORA_250K) + +21 dBm TX.
-// Channel selection is automatic:
+// LR PHY + LR-rate broadcast (LORA_250K) always on (modulation only, no extra heat).
+// Pass longRange=true to begin() to also boost TX power to +21 dBm (more range,
+// warms chip under continuous TX). Channel selection is automatic:
 //   - Wi-Fi STA connected: adopts the STA channel (router dictates it).
 //   - Wi-Fi STA down: scans channels 1..13, locks to the first one that
 //     receives an ESP-NOW frame and stays there until reboot.
@@ -25,6 +26,9 @@ public:
 
   // channel != 0 pins the radio to that channel (1..13) and disables auto-scan.
   // channel == 0 keeps the auto behavior: adopt STA channel, else hop+lock via pings.
+  // LR PHY + LR-rate broadcast (LORA_250K) always on (modulation only, no extra heat).
+  // longRange=true also boosts TX power to +21 dBm — gives ~3-4x more range but causes
+  // chip warming under continuous TX. Default false = stock ~+18 dBm.
   bool begin(wifi_interface_t iface = WIFI_IF_STA, bool longRange = false, uint8_t channel = 0);
   void end();
 
